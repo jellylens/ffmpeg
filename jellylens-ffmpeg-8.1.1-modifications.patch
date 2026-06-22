@@ -1,0 +1,48 @@
+diff --git a/libavcodec/videotoolbox.c b/libavcodec/videotoolbox.c
+index 2cd22cb..ea67d59 100644
+--- a/libavcodec/videotoolbox.c
++++ b/libavcodec/videotoolbox.c
+@@ -818,7 +818,10 @@ static CFDictionaryRef videotoolbox_buffer_attributes_create(int width,
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferWidthKey, w);
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferHeightKey, h);
+ #if TARGET_OS_IPHONE
++#if !TARGET_OS_VISION
++    /* kCVPixelBufferOpenGLESCompatibilityKey unavailable on visionOS (no OpenGL ES) */
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferOpenGLESCompatibilityKey, kCFBooleanTrue);
++#endif
+ #else
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferIOSurfaceOpenGLTextureCompatibilityKey, kCFBooleanTrue);
+ #endif
+diff --git a/libavformat/tls_securetransport.c b/libavformat/tls_securetransport.c
+index f52fc97..8f3c2fb 100644
+--- a/libavformat/tls_securetransport.c
++++ b/libavformat/tls_securetransport.c
+@@ -47,6 +47,7 @@ typedef struct TLSContext {
+     SSLContextRef ssl_context;
+     CFArrayRef ca_array;
+     int lastErr;
++    int handshake_done;
+ } TLSContext;
+ 
+ static int print_tls_error(URLContext *h, int ret)
+@@ -246,7 +247,11 @@ static int tls_close(URLContext *h)
+ {
+     TLSContext *c = h->priv_data;
+     if (c->ssl_context) {
+-        SSLClose(c->ssl_context);
++        /* JellyVision #23: SSLClose on an aborted handshake NULL-derefs in
++         * SecureTransport (tls_handshake_close -> SSLSendAlert). Skip close_notify
++         * unless the handshake completed; releasing the context is always safe. */
++        if (c->handshake_done)
++            SSLClose(c->ssl_context);
+         CFRelease(c->ssl_context);
+     }
+     if (c->ca_array)
+@@ -330,6 +335,7 @@ static int tls_open(URLContext *h, const char *uri, int flags, AVDictionary **op
+                 CFRelease(peerTrust);
+         }
+         if (status == noErr) {
++            c->handshake_done = 1;
+             break;
+         } else if (status != errSSLWouldBlock) {
+             av_log(h, AV_LOG_ERROR, "Unable to negotiate TLS/SSL session: %i\n", (int)status);
